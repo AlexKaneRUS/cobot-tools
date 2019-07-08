@@ -293,25 +293,22 @@ calcTarget True dna sourceInd sp | null offTargets || tgtE > maxOffTarget = res
     -- off-targets for our primer.
     --
     matchingSeqs :: [[DNA]]
-    matchingSeqs = fmap matchingSeq [dna1, dna2, dnaRevComp]
+    matchingSeqs = fmap matchingSeq [invertedDna, dnaRevComp]
       where
-        -- we split @dna@ at @primerLenHalf@ to avoid considering target
-        -- interaction as an off-target interaction
+        -- we invert the cyclic @dna@ in such way that target area is being cut in half,
+        -- so that it won't be considered as off-target interaction
+        invertedDna | [x]    <- invertPoints = drop x dna <> drop maxPrimerLength (take x dna)
+                    | [x, y] <- invertPoints = take (y - x) . drop x $ dna
+                    | otherwise              = error "This branch is never visited."
 
-        -- part of @dna@ up to @primerLenHalf@
-        dna1 = take primerLenHalf dna
-
-        -- part of @dna@ from @primerLenHalf@
-        --
-        -- it is important that if the sequence is cyclic, target could appear at its end
-        -- we need to avoid that, hence we consider two situations:
-        --     1. if @primerLenHalf@ > @maxPrimerLength@, it means that there is no risk of target
-        --        appearing at the end of the sequence;
-        --
-        --     2. otherwise we drop (@maxPrimerLength@ - @primerLenHalf@) nucleotides from the end
-        --        of the sequence in order to gaurantee that target doesn't appear at the end of the sequence.
-        dna2 | primerLenHalf > maxPrimerLength = drop primerLenHalf dna
-             | otherwise                       = drop primerLenHalf $ take (length dna - (maxPrimerLength - primerLenHalf)) dna
+        -- here we check that @primerLenHalf@ is not in the part of sequence,
+        -- that was appended at the end to create cyclic sequence.
+        -- If it's not in this part, invert at @primerLenHalf@.
+        -- Otherwise consider everything in between @modPos@ and (@modPos@ + (length @dna@ - @maxPrimerLength@))
+        -- as inverted sequence.
+        modPos       = primerLenHalf `mod` (length dna - maxPrimerLength)
+        invertPoints | modPos >= maxPrimerLength = [primerLenHalf]
+                     | otherwise                 = [modPos, modPos + (length dna - maxPrimerLength)]
 
         -- off-target interaction could happen in reversed direction
         dnaRevComp = reverse $ fmap cNA dna
