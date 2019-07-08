@@ -44,5 +44,5 @@ testPrimersOptimization = do
       fmap symbol . _seq' <$> designPrimer True wholePlasmid2 0 `shouldBe` Left "All primers designed from given position don't bind to target."
     it "Shouldn't find any primers; Sequence: whole plasmid; pos: 7" $
       fmap symbol . _seq' <$> designPrimer True wholePlasmid2 7 `shouldBe` Left "All primers designed from given position don't bind to target."
-    it "Shouldn't find any primers; Sequence: whole plasmid; pos: 10" $
+    it "Sequence: whole plasmid; pos: 10" $
       fmap symbol . _seq' <$> designPrimer True wholePlasmid2 10 `shouldBe` Right "CGACGCGCGAGCGAGCG"

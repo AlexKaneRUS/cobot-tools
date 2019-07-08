@@ -2,6 +2,7 @@
 
 module Bio.Tools.Sequence.Primers.Optimization
  ( designPrimer
+ , calculateTargetToFold
  ) where
 
 import           Bio.Chain                           (fromList)
@@ -35,6 +36,15 @@ minPrimerLength = 17
 --
 maxPrimerLength :: Int
 maxPrimerLength = 35
+
+-- | For given primer calculates relation of this primer's energy of interaction
+-- with target to its energy of forming secondary structure.
+--
+calculateTargetToFold :: Primer -> Float
+calculateTargetToFold primer = tgtEnergy / foldingEnergy
+  where
+    tgtEnergy     = cofoldEnergy primer primer
+    foldingEnergy = abs $ fst $ fold annealingTemp primer
 
 -- | Given 'DNA' sequence and position in that sequence designs forward primer
 -- for that sequence. Primer will start at the given position. @isCyclic@ marks
