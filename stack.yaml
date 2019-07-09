@@ -47,7 +47,7 @@ packages:
 
 extra-deps:
 - git: https://github.com/less-wrong/cobot
-  commit: master
+  commit: 0.1.1.0
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true

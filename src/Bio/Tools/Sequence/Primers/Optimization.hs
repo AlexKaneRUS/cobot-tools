@@ -2,49 +2,39 @@
 
 module Bio.Tools.Sequence.Primers.Optimization
  ( designPrimer
- , calculateTargetToFold
  ) where
 
-import           Bio.Chain                           (fromList)
-import           Bio.Chain.Alignment                 (AffineGap (..),
-                                                      AffineGap2,
-                                                      AlignmentResult (..),
-                                                      LocalAlignment (..),
-                                                      Operation (..), align)
-import           Bio.NucleicAcid.Chain               (NucleicAcidChain (..))
-import           Bio.NucleicAcid.Nucleotide          (Complementary (..),
-                                                      DNA (..), symbol)
-import           Bio.Tools.Sequence.Primers.Types    (Primer, ScoredPrimer (..),
-                                                      eTgt, eTgtEFold,
-                                                      gcContent, meltingTemp,
-                                                      seq')
-import           Bio.Tools.Sequence.ViennaRNA.Cofold (cofold)
-import           Bio.Tools.Sequence.ViennaRNA.Fold   (fold)
-import           Control.Lens                        ((&), (.~), (^.))
-import           Control.Monad                       (when)
-import           Control.Monad.Except                (MonadError, throwError)
-import           Data.List                           (sortOn)
-import           Data.Maybe                          (catMaybes)
-import           Data.Text                           (Text)
-
--- | Minimum recommended primer's length.
---
-minPrimerLength :: Int
-minPrimerLength = 17
-
--- | Maximum recommended primer's length.
---
-maxPrimerLength :: Int
-maxPrimerLength = 35
-
--- | For given primer calculates relation of this primer's energy of interaction
--- with target to its energy of forming secondary structure.
---
-calculateTargetToFold :: Primer -> Float
-calculateTargetToFold primer = tgtEnergy / foldingEnergy
-  where
-    tgtEnergy     = cofoldEnergy primer primer
-    foldingEnergy = abs $ fst $ fold annealingTemp primer
+import           Bio.Chain                            (fromList)
+import           Bio.Chain.Alignment                  (AffineGap (..),
+                                                       AffineGap2,
+                                                       AlignmentResult (..),
+                                                       LocalAlignment (..),
+                                                       Operation (..), align)
+import           Bio.NucleicAcid.Chain                (NucleicAcidChain (..))
+import           Bio.NucleicAcid.Nucleotide           (Complementary (..),
+                                                       DNA (..), symbol)
+import           Bio.Tools.Sequence.Primers.Constants as Constants (annealingTemp,
+                                                                    bindingRate,
+                                                                    eTgtEFoldRel,
+                                                                    maxPrimerGCContent,
+                                                                    maxPrimerLength,
+                                                                    maxPrimerMeltingTemp,
+                                                                    minPrimerGCContent,
+                                                                    minPrimerLength,
+                                                                    minPrimerMeltingTemp,
+                                                                    topN)
+import           Bio.Tools.Sequence.Primers.Types     (Primer,
+                                                       ScoredPrimer (..), eTgt,
+                                                       eTgtEFold, gcContent,
+                                                       meltingTemp, seq')
+import           Bio.Tools.Sequence.ViennaRNA.Cofold  (cofold)
+import           Bio.Tools.Sequence.ViennaRNA.Fold    (fold)
+import           Control.Lens                         ((&), (.~), (^.))
+import           Control.Monad                        (when)
+import           Control.Monad.Except                 (MonadError, throwError)
+import           Data.List                            (sortOn)
+import           Data.Maybe                           (catMaybes)
+import           Data.Text                            (Text)
 
 -- | Given 'DNA' sequence and position in that sequence designs forward primer
 -- for that sequence. Primer will start at the given position. @isCyclic@ marks
@@ -66,16 +56,19 @@ calculateTargetToFold primer = tgtEnergy / foldingEnergy
 --
 designPrimer :: MonadError Text m => Bool -> [DNA] -> Int -> m ScoredPrimer
 designPrimer isCyclic dna' pos = do
-    when (pos >= length dna') $ throwError "Given position is out of range."
+    when (pos >= length dna') $ throwError "Bio.Tools.Sequence.Primers.Optimization: given position is out of range."
 
     withE <- energyFilter . gcContentFilter . lengthFilter $ candidates
 
     case gcOnEndFilter withE of
-      [] -> throwError "All primers designed from given position are seriously flawed."
+      [] -> throwError badPrimersError
       l  -> pure $ head $ sortOn (fmap negate . (^. gcContent)) l
   where
-    dna        = if isCyclic then dna' <> take maxPrimerLength dna' else dna'
+    dna        = if isCyclic then dna' <> take Constants.maxPrimerLength dna' else dna'
     candidates = genTemperatureCandidates (drop pos dna) []
+
+    badPrimersError :: Text
+    badPrimersError = "Bio.Tools.Sequence.Primers.Optimization: all primers designed from given position are seriously flawed."
 
     -- | Generates candidate primers with melting temperature in needed range.
     --
@@ -89,22 +82,12 @@ designPrimer isCyclic dna' pos = do
 
         Just mTemp = primerWithTemp ^. meltingTemp
 
-        res | mTemp < minPrimerMeltingTemp = genTemperatureCandidates xs newBase
-            | mTemp > maxPrimerMeltingTemp = []
-            | otherwise                    = primerWithTemp : genTemperatureCandidates xs newBase
+        res | mTemp < Constants.minPrimerMeltingTemp = genTemperatureCandidates xs newBase
+            | mTemp > Constants.maxPrimerMeltingTemp = []
+            | otherwise                              = primerWithTemp : genTemperatureCandidates xs newBase
 
         toScored :: Primer -> ScoredPrimer
         toScored p = ScoredPrimer p Nothing Nothing Nothing Nothing
-
-        -- | Minimum recommended primer's melting temperature.
-        --
-        minPrimerMeltingTemp :: Int
-        minPrimerMeltingTemp = 55
-
-        -- | Maximum recommended primer's melting temperature.
-        --
-        maxPrimerMeltingTemp :: Int
-        maxPrimerMeltingTemp = 75
 
     -- | Filters 'ScoredPrimer's based on their length.
     --
@@ -112,7 +95,7 @@ designPrimer isCyclic dna' pos = do
     lengthFilter = filter lengthPred
       where
         lengthPred :: ScoredPrimer -> Bool
-        lengthPred sp = minPrimerLength <= ls && ls <= maxPrimerLength
+        lengthPred sp = Constants.minPrimerLength <= ls && ls <= Constants.maxPrimerLength
           where
             ls = length $ sp ^. seq'
 
@@ -129,10 +112,10 @@ designPrimer isCyclic dna' pos = do
         gcOnEndPred = (`elem` [DC, DG]) . last . (^. seq')
 
     -- | Leaves primers whose GC-content is in needed range. If no such primers
-    -- are found, leaves @topN@ primers with GC-content nearest to needed range.
+    -- are found, leaves @Constants.topN@ primers with GC-content nearest to needed range.
     --
     gcContentFilter :: [ScoredPrimer] -> [ScoredPrimer]
-    gcContentFilter sps | null filtered = take topN sorted
+    gcContentFilter sps | null filtered = take Constants.topN sorted
                         | otherwise     = filtered
       where
         primersWithGC = fmap calcGCContent sps
@@ -140,31 +123,15 @@ designPrimer isCyclic dna' pos = do
 
         sorted = sortOn scoringFunc primersWithGC
 
-        -- | Number of candidates that are taken if none of candidates satisfies
-        -- GC-content condition.
-        --
-        topN :: Int
-        topN = 10
-
         gcContentPred :: ScoredPrimer -> Bool
-        gcContentPred sp = minPrimerGCContent <= gcc && gcc <= maxPrimerGCContent
+        gcContentPred sp = Constants.minPrimerGCContent <= gcc && gcc <= Constants.maxPrimerGCContent
           where
             Just gcc = sp ^. gcContent
 
         scoringFunc :: ScoredPrimer -> Float
-        scoringFunc sp = min (abs $ minPrimerGCContent - gcc) (abs $ maxPrimerGCContent - gcc)
+        scoringFunc sp = min (abs $ Constants.minPrimerGCContent - gcc) (abs $ Constants.maxPrimerGCContent - gcc)
           where
             Just gcc = sp ^. gcContent
-
-        -- | Minimum recommended primer's GC-content.
-        --
-        minPrimerGCContent :: Float
-        minPrimerGCContent = 40
-
-        -- | Maximum recommended primer's GC-content.
-        --
-        maxPrimerGCContent :: Float
-        maxPrimerGCContent = 60
 
     -- | Filters primers using energy characteristics.
     --
@@ -172,34 +139,26 @@ designPrimer isCyclic dna' pos = do
     energyFilter sps = fmap eTgtEFoldFilter . eTgtFilter $ sps
 
     -- | Leaves only primers whose relation of energy of interaction with target
-    -- to energy of forming a secondary structure is higher then @eTgtEFoldRel@.
+    -- to energy of forming a secondary structure is higher then @Constants.eTgtEFoldRel@.
     --
     eTgtEFoldFilter :: [ScoredPrimer] -> [ScoredPrimer]
     eTgtEFoldFilter s = filter eTgtEFoldPred . fmap calcTargetFold $ s
       where
         eTgtEFoldPred :: ScoredPrimer -> Bool
-        eTgtEFoldPred sp = etef >= eTgtEFoldRel
+        eTgtEFoldPred sp = etef >= Constants.eTgtEFoldRel
           where
             Just etef = sp ^. eTgtEFold
-
-        -- | Minimum allowed value of primer's tagret interaction energy to
-        -- primer's folding energy relation.
-        --
-        eTgtEFoldRel :: Float
-        eTgtEFoldRel = 2.7
 
     -- | Leaves only primers that bind to target on source sequence.
     --
     eTgtFilter :: MonadError Text m => [ScoredPrimer] -> m [ScoredPrimer]
-    eTgtFilter s | null res  = throwError "All primers designed from given position don't bind to target."
+    eTgtFilter s | null res  = throwError badPositionError
                  | otherwise = pure res
       where
         res = catMaybes $ fmap (calcTarget isCyclic dna pos) s
 
--- | Temperature under which annealing of primers happens.
---
-annealingTemp :: Double
-annealingTemp = 62
+        badPositionError :: Text
+        badPositionError = "Bio.Tools.Sequence.Primers.Optimization: all primers designed from given position don't bind to target."
 
 -- | Calculates melting temperature for 'ScoredPrimer'.
 -- Temperature is calculated using the following formula: 4 * (C + G) + 2 * (A + T).
@@ -230,7 +189,7 @@ calcGCContent sp = sp & gcContent .~ Just content
 calcTargetFold :: ScoredPrimer -> ScoredPrimer
 calcTargetFold sp = sp & eTgtEFold .~ Just tgtToFold
   where
-    foldingEnergy = fst $ fold annealingTemp $ sp ^. seq'
+    foldingEnergy = fst $ fold Constants.annealingTemp $ sp ^. seq'
 
     -- @calcTargetFold@ is used only after 'ScoredPrimer's target interaction energy
     -- has been calculated
@@ -241,7 +200,7 @@ calcTargetFold sp = sp & eTgtEFold .~ Just tgtToFold
 -- complementary strand.
 --
 cofoldEnergy :: [DNA] -> [DNA] -> Float
-cofoldEnergy sp s = abs $ fst $ cofold annealingTemp (reverse sp, fmap cNA s)
+cofoldEnergy sp s = abs $ fst $ cofold Constants.annealingTemp (reverse sp, fmap cNA s)
 
 -- | Local alignment algorithm that aligns arguments based on their complementarity
 -- and doesn't allow gaps on the second argument of the alignment (that is primer in our terms).
@@ -307,18 +266,18 @@ calcTarget True dna sourceInd sp | null offTargets || tgtE > maxOffTarget = res
       where
         -- we invert the cyclic @dna@ in such way that target area is being cut in half,
         -- so that it won't be considered as off-target interaction
-        invertedDna | [x]    <- invertPoints = drop x dna <> drop maxPrimerLength (take x dna)
+        invertedDna | [x]    <- invertPoints = drop x dna <> drop Constants.maxPrimerLength (take x dna)
                     | [x, y] <- invertPoints = take (y - x) . drop x $ dna
                     | otherwise              = error "This branch is never visited."
 
         -- here we check that @primerLenHalf@ is not in the part of sequence,
         -- that was appended at the end to create cyclic sequence.
         -- If it's not in this part, invert at @primerLenHalf@.
-        -- Otherwise consider everything in between @modPos@ and (@modPos@ + (length @dna@ - @maxPrimerLength@))
+        -- Otherwise consider everything in between @modPos@ and (@modPos@ + (length @dna@ - @Constants.maxPrimerLength@))
         -- as inverted sequence.
-        modPos       = primerLenHalf `mod` (length dna - maxPrimerLength)
-        invertPoints | modPos >= maxPrimerLength = [primerLenHalf]
-                     | otherwise                 = [modPos, modPos + (length dna - maxPrimerLength)]
+        modPos       = primerLenHalf `mod` (length dna - Constants.maxPrimerLength)
+        invertPoints | modPos >= Constants.maxPrimerLength = [primerLenHalf]
+                     | otherwise                           = [modPos, modPos + (length dna - Constants.maxPrimerLength)]
 
         -- off-target interaction could happen in reversed direction
         dnaRevComp = reverse $ fmap cNA dna
@@ -364,7 +323,7 @@ calcTarget False dna sourceInd sp | Just e <- primerTargetEnergy = pure $ sp & e
 
         compPrimerSeq = fmap cNA dna
 
-        (e, bindStr) = cofold annealingTemp (reverse primerSeq, compPrimerSeq)
+        (e, bindStr) = cofold Constants.annealingTemp (reverse primerSeq, compPrimerSeq)
         primerLength = length spStr
 
         -- energy of primer's interaction revesed dna strand
@@ -413,16 +372,11 @@ calcTarget False dna sourceInd sp | Just e <- primerTargetEnergy = pure $ sp & e
         closeBracket :: Char
         closeBracket = ')'
 
-        -- | Checks that not less then @bindingRate@ * 100 precents of primer's nucleotides
+        -- | Checks that not less then @Constants.bindingRate@ * 100 precents of primer's nucleotides
         -- interact with target.
         --
         checkBindingRate :: Int -> Bool
-        checkBindingRate cnt = fromIntegral cnt / fromIntegral primerLength >= bindingRate
-
-        -- | Rate of nucleotides from primer that should bind to target area of source sequence.
-        --
-        bindingRate :: Float
-        bindingRate = 0.75
+        checkBindingRate cnt = fromIntegral cnt / fromIntegral primerLength >= Constants.bindingRate
 
 --------------------------------------------------------------------------------
 -- Utility functions.
